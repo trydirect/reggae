@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrarError {
     NoRegistrarsConfigured,
+    InvalidRegistrationPeriod(u8),
     DomainUnavailable,
     ProviderFailure(String),
 }
@@ -12,8 +13,11 @@ impl fmt::Display for RegistrarError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoRegistrarsConfigured => write!(f, "no registrars configured"),
+            Self::InvalidRegistrationPeriod(years) => {
+                write!(f, "invalid registration period: {years} years")
+            }
             Self::DomainUnavailable => write!(f, "domain is unavailable across all registrars"),
-            Self::ProviderFailure(message) => write!(f, "registrar failure: {message}"),
+            Self::ProviderFailure(message) => write!(f, "provider failure: {message}"),
         }
     }
 }
@@ -45,17 +49,22 @@ impl UnifiedRegistrar {
         }
 
         let mut saw_successful_check = false;
+        let mut last_error = None;
 
         for registrar in &self.registrars {
             match registrar.is_domain_available(domain) {
                 Ok(true) => return Ok(true),
                 Ok(false) => saw_successful_check = true,
-                Err(_) => continue,
+                Err(error) => last_error = Some(error),
             }
         }
 
         if saw_successful_check {
             Ok(false)
+        } else if let Some(error) = last_error {
+            Err(RegistrarError::ProviderFailure(format!(
+                "all registrars failed availability checks: {error}"
+            )))
         } else {
             Err(RegistrarError::ProviderFailure(
                 "all registrars failed availability checks".to_string(),
@@ -66,6 +75,9 @@ impl UnifiedRegistrar {
     pub fn register_domain(&self, domain: &str, years: u8) -> Result<String, RegistrarError> {
         if self.registrars.is_empty() {
             return Err(RegistrarError::NoRegistrarsConfigured);
+        }
+        if years == 0 || years > 10 {
+            return Err(RegistrarError::InvalidRegistrationPeriod(years));
         }
 
         let mut saw_unavailable = false;
@@ -88,7 +100,7 @@ impl UnifiedRegistrar {
             Err(RegistrarError::DomainUnavailable)
         } else {
             Err(RegistrarError::ProviderFailure(
-                "all registrars failed".to_string(),
+                "all registrars failed during registration attempt".to_string(),
             ))
         }
     }
@@ -192,7 +204,7 @@ mod tests {
         assert_eq!(
             registrar.is_domain_available("example.com"),
             Err(RegistrarError::ProviderFailure(
-                "all registrars failed availability checks".to_string()
+                "all registrars failed availability checks: provider failure: b".to_string()
             ))
         );
     }
@@ -225,6 +237,24 @@ mod tests {
         assert_eq!(
             registrar.register_domain("example.com", 1),
             Err(RegistrarError::NoRegistrarsConfigured)
+        );
+    }
+
+    #[test]
+    fn register_rejects_invalid_registration_period() {
+        let registrar = UnifiedRegistrar::new(vec![Box::new(MockRegistrar::new(
+            "one",
+            Ok(true),
+            Ok(()),
+        ))]);
+
+        assert_eq!(
+            registrar.register_domain("example.com", 0),
+            Err(RegistrarError::InvalidRegistrationPeriod(0))
+        );
+        assert_eq!(
+            registrar.register_domain("example.com", 11),
+            Err(RegistrarError::InvalidRegistrationPeriod(11))
         );
     }
 }
