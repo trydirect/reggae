@@ -63,7 +63,7 @@ impl UnifiedRegistrar {
         }
     }
 
-    pub fn register_domain(&self, domain: &str, years: u8) -> Result<&str, RegistrarError> {
+    pub fn register_domain(&self, domain: &str, years: u8) -> Result<String, RegistrarError> {
         if self.registrars.is_empty() {
             return Err(RegistrarError::NoRegistrarsConfigured);
         }
@@ -74,7 +74,7 @@ impl UnifiedRegistrar {
         for registrar in &self.registrars {
             match registrar.is_domain_available(domain) {
                 Ok(true) => match registrar.register_domain(domain, years) {
-                    Ok(()) => return Ok(registrar.name()),
+                    Ok(()) => return Ok(registrar.name().to_string()),
                     Err(error) => last_error = Some(error),
                 },
                 Ok(false) => saw_unavailable = true,
@@ -155,7 +155,10 @@ mod tests {
             Box::new(MockRegistrar::new("two", Ok(true), Ok(()))),
         ]);
 
-        assert_eq!(registrar.register_domain("example.com", 1), Ok("two"));
+        assert_eq!(
+            registrar.register_domain("example.com", 1),
+            Ok("two".to_string())
+        );
     }
 
     #[test]
@@ -168,6 +171,46 @@ mod tests {
         assert_eq!(
             registrar.register_domain("example.com", 1),
             Err(RegistrarError::DomainUnavailable)
+        );
+    }
+
+    #[test]
+    fn availability_returns_failure_when_all_providers_error() {
+        let registrar = UnifiedRegistrar::new(vec![
+            Box::new(MockRegistrar::new(
+                "one",
+                Err(RegistrarError::ProviderFailure("a".to_string())),
+                Ok(()),
+            )),
+            Box::new(MockRegistrar::new(
+                "two",
+                Err(RegistrarError::ProviderFailure("b".to_string())),
+                Ok(()),
+            )),
+        ]);
+
+        assert_eq!(
+            registrar.is_domain_available("example.com"),
+            Err(RegistrarError::ProviderFailure(
+                "all registrars failed availability checks".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn register_falls_back_when_first_available_provider_fails_registration() {
+        let registrar = UnifiedRegistrar::new(vec![
+            Box::new(MockRegistrar::new(
+                "one",
+                Ok(true),
+                Err(RegistrarError::ProviderFailure("unable to register".to_string())),
+            )),
+            Box::new(MockRegistrar::new("two", Ok(true), Ok(()))),
+        ]);
+
+        assert_eq!(
+            registrar.register_domain("example.com", 1),
+            Ok("two".to_string())
         );
     }
 
