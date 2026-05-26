@@ -1,0 +1,27 @@
+default_provider: porkbun
+
+providers:
+  porkbun:
+    api_key: ""
+    secret_api_key: ""
+  cloudflare:
+    api_token: ""
+  godaddy:
+    api_key: ""
+    api_secret: ""
+  namecheap:
+    api_user: ""
+    api_key: ""
+    username: ""
+
+scheduler:
+  enabled: false
+  check_interval_secs: 86400   # daily
+  expiry_lead_days: 30         # notify when < 30 days left
+  domains: []                  # list of domains to monitor
+  notification:
+    type: stdout               # stdout | webhook
+    webhook_url: ""
+
+logging:
+  level: info                  # trace | debug | info | warn | error
