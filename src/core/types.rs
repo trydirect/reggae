@@ -87,3 +87,23 @@ pub struct Pricing {
     pub transfer_price: f64,
     pub currency: String,
 }
+
+/// Registrant contact information required by most registrars for domain registration.
+/// Populate from config or CLI — never hardcode.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RegistrantContact {
+    pub first_name: String,
+    pub last_name: String,
+    pub email: String,
+    /// Phone in E.164 format: +1.4805551234
+    pub phone: String,
+    pub organization: Option<String>,
+    pub address1: String,
+    pub address2: Option<String>,
+    pub city: String,
+    /// Two-letter state/province code
+    pub state: String,
+    /// Two-letter ISO country code
+    pub country: String,
+    pub postal_code: String,
+}

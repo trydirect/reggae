@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use crate::core::error::Error;
+use crate::core::{error::Error, types::RegistrantContact};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -12,6 +12,9 @@ pub struct Settings {
     pub scheduler: SchedulerConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// Default registrant contact used for domain registration (GoDaddy, Namecheap, Porkbun).
+    #[serde(default)]
+    pub registrant: RegistrantContact,
 }
 
 fn default_provider() -> String {
@@ -50,6 +53,9 @@ pub struct GodaddyConfig {
     pub api_key: String,
     #[serde(default)]
     pub api_secret: String,
+    /// Use OTE (sandbox) endpoint
+    #[serde(default)]
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -60,6 +66,12 @@ pub struct NamecheapConfig {
     pub api_key: String,
     #[serde(default)]
     pub username: String,
+    /// Your whitelisted public IP for Namecheap API access
+    #[serde(default)]
+    pub client_ip: String,
+    /// Use sandbox endpoint (api.sandbox.namecheap.com)
+    #[serde(default)]
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,18 +84,12 @@ pub struct SchedulerConfig {
     pub expiry_lead_days: u32,
     #[serde(default)]
     pub notification: NotificationConfig,
-    /// List of domains to monitor for expiry
     #[serde(default)]
     pub domains: Vec<String>,
 }
 
-fn default_check_interval() -> u64 {
-    86400
-}
-
-fn default_expiry_lead_days() -> u32 {
-    30
-}
+fn default_check_interval() -> u64 { 86400 }
+fn default_expiry_lead_days() -> u32 { 30 }
 
 impl Default for SchedulerConfig {
     fn default() -> Self {
@@ -123,20 +129,15 @@ pub struct LoggingConfig {
     pub level: String,
 }
 
-fn default_log_level() -> String {
-    "info".to_string()
-}
+fn default_log_level() -> String { "info".to_string() }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
-        Self {
-            level: default_log_level(),
-        }
+        Self { level: default_log_level() }
     }
 }
 
 impl Settings {
-    /// Load settings from optional config file, then apply ENV overrides.
     pub fn load(config_path: Option<&Path>) -> Result<Self, Error> {
         let mut settings = Self::from_file(config_path)?;
         settings.apply_env_overrides();
@@ -172,49 +173,32 @@ impl Settings {
     fn apply_env_overrides(&mut self) {
         use std::env;
 
-        if let Ok(v) = env::var("DM_DEFAULT_PROVIDER") {
-            self.default_provider = v;
+        if let Ok(v) = env::var("DM_DEFAULT_PROVIDER") { self.default_provider = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_PORKBUN_API_KEY") { self.providers.porkbun.api_key = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_PORKBUN_SECRET_API_KEY") { self.providers.porkbun.secret_api_key = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_CLOUDFLARE_API_TOKEN") { self.providers.cloudflare.api_token = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_GODADDY_API_KEY") { self.providers.godaddy.api_key = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_GODADDY_API_SECRET") { self.providers.godaddy.api_secret = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_GODADDY_SANDBOX") {
+            self.providers.godaddy.sandbox = v.to_lowercase() == "true" || v == "1";
         }
-        if let Ok(v) = env::var("DM_PROVIDERS_PORKBUN_API_KEY") {
-            self.providers.porkbun.api_key = v;
-        }
-        if let Ok(v) = env::var("DM_PROVIDERS_PORKBUN_SECRET_API_KEY") {
-            self.providers.porkbun.secret_api_key = v;
-        }
-        if let Ok(v) = env::var("DM_PROVIDERS_CLOUDFLARE_API_TOKEN") {
-            self.providers.cloudflare.api_token = v;
-        }
-        if let Ok(v) = env::var("DM_PROVIDERS_GODADDY_API_KEY") {
-            self.providers.godaddy.api_key = v;
-        }
-        if let Ok(v) = env::var("DM_PROVIDERS_GODADDY_API_SECRET") {
-            self.providers.godaddy.api_secret = v;
-        }
-        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_API_USER") {
-            self.providers.namecheap.api_user = v;
-        }
-        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_API_KEY") {
-            self.providers.namecheap.api_key = v;
-        }
-        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_USERNAME") {
-            self.providers.namecheap.username = v;
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_API_USER") { self.providers.namecheap.api_user = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_API_KEY") { self.providers.namecheap.api_key = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_USERNAME") { self.providers.namecheap.username = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_CLIENT_IP") { self.providers.namecheap.client_ip = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_SANDBOX") {
+            self.providers.namecheap.sandbox = v.to_lowercase() == "true" || v == "1";
         }
         if let Ok(v) = env::var("DM_SCHEDULER_ENABLED") {
             self.scheduler.enabled = v.to_lowercase() == "true" || v == "1";
         }
         if let Ok(v) = env::var("DM_SCHEDULER_CHECK_INTERVAL_SECS") {
-            if let Ok(n) = v.parse() {
-                self.scheduler.check_interval_secs = n;
-            }
+            if let Ok(n) = v.parse() { self.scheduler.check_interval_secs = n; }
         }
         if let Ok(v) = env::var("DM_SCHEDULER_EXPIRY_LEAD_DAYS") {
-            if let Ok(n) = v.parse() {
-                self.scheduler.expiry_lead_days = n;
-            }
+            if let Ok(n) = v.parse() { self.scheduler.expiry_lead_days = n; }
         }
-        if let Ok(v) = env::var("DM_LOGGING_LEVEL") {
-            self.logging.level = v;
-        }
+        if let Ok(v) = env::var("DM_LOGGING_LEVEL") { self.logging.level = v; }
     }
 }
 
@@ -238,7 +222,6 @@ mod tests {
         writeln!(f, "default_provider: cloudflare").unwrap();
         writeln!(f, "logging:").unwrap();
         writeln!(f, "  level: debug").unwrap();
-
         let s = Settings::load(Some(f.path())).unwrap();
         assert_eq!(s.default_provider, "cloudflare");
         assert_eq!(s.logging.level, "debug");
@@ -248,11 +231,9 @@ mod tests {
     fn test_env_overrides() {
         std::env::set_var("DM_DEFAULT_PROVIDER", "godaddy");
         std::env::set_var("DM_LOGGING_LEVEL", "warn");
-
         let s = Settings::load(None).unwrap();
         assert_eq!(s.default_provider, "godaddy");
         assert_eq!(s.logging.level, "warn");
-
         std::env::remove_var("DM_DEFAULT_PROVIDER");
         std::env::remove_var("DM_LOGGING_LEVEL");
     }

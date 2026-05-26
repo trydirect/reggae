@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
                 settings.providers.godaddy.api_key.clone(),
                 settings.providers.godaddy.api_secret.clone(),
                 http.clone(),
+                settings.providers.godaddy.sandbox,
             )),
         );
     }
@@ -74,7 +75,9 @@ async fn main() -> Result<()> {
                 settings.providers.namecheap.api_user.clone(),
                 settings.providers.namecheap.api_key.clone(),
                 settings.providers.namecheap.username.clone(),
+                settings.providers.namecheap.client_ip.clone(),
                 http.clone(),
+                settings.providers.namecheap.sandbox,
             )),
         );
     }
@@ -83,11 +86,11 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Command::Check(args) => {
-            check::run(args, &global, &registry).await
+            check::run(args, &global, &registry, &settings).await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         Command::Register(args) => {
-            register::run(args, &global, &registry).await
+            register::run(args, &global, &registry, &settings).await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         Command::Info(args) => {
@@ -118,11 +121,11 @@ async fn main() -> Result<()> {
             println!("Transfer initiated for '{}'", args.domain);
         }
         Command::Dns(args) => {
-            dns::run(args, &global, &registry).await
+            dns::run(args, &global, &registry, &settings).await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         Command::Ns(args) => {
-            nameserver::run(args, &global, &registry).await
+            nameserver::run(args, &global, &registry, &settings).await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         Command::Pricing(args) => {

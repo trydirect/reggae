@@ -4,7 +4,16 @@ use crate::core::{error::Error, types::*};
 #[async_trait]
 pub trait DomainRegistrar: Send + Sync {
     async fn check_availability(&self, domain: &str) -> Result<Availability, Error>;
-    async fn register_domain(&self, domain: &str, records: Option<Vec<DnsRecord>>) -> Result<Domain, Error>;
+
+    /// Register a domain. `contact` is required by most registrars.
+    async fn register_domain(
+        &self,
+        domain: &str,
+        years: u32,
+        contact: &RegistrantContact,
+        records: Option<Vec<DnsRecord>>,
+    ) -> Result<Domain, Error>;
+
     async fn renew_domain(&self, domain: &str, years: u32) -> Result<(), Error>;
     async fn transfer_domain(&self, domain: &str, auth_code: &str) -> Result<(), Error>;
     async fn get_domain_info(&self, domain: &str) -> Result<Domain, Error>;

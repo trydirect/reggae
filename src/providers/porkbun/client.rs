@@ -141,10 +141,16 @@ impl DomainRegistrar for PorkbunClient {
     }
 
     #[instrument(skip(self, records))]
-    async fn register_domain(&self, domain: &str, records: Option<Vec<DnsRecord>>) -> Result<Domain, Error> {
+    async fn register_domain(
+        &self,
+        domain: &str,
+        years: u32,
+        _contact: &RegistrantContact,
+        records: Option<Vec<DnsRecord>>,
+    ) -> Result<Domain, Error> {
         let mut body = self.auth_body();
         body["domain"] = json!(domain);
-        body["years"] = json!(1);
+        body["years"] = json!(years);
 
         let val: Value = self.post("/domain/register", body).await?;
         let expiry = val.get("expireDate")

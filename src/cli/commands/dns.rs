@@ -1,9 +1,10 @@
 use crate::cli::args::{DnsCommand, DnsSubcommand, GlobalArgs};
-use crate::cli::commands::output::{print_dns_records, OutputFormat};
+use crate::cli::commands::output::print_dns_records;
+use crate::config::Settings;
 use crate::core::{registry::ProviderRegistry, error::Error, types::DnsRecord};
 
-pub async fn run(args: &DnsCommand, global: &GlobalArgs, registry: &ProviderRegistry) -> Result<(), Error> {
-    let provider_name = global.provider.as_deref().unwrap_or("porkbun");
+pub async fn run(args: &DnsCommand, global: &GlobalArgs, registry: &ProviderRegistry, settings: &Settings) -> Result<(), Error> {
+    let provider_name = global.provider.as_deref().unwrap_or(&settings.default_provider);
     let provider = registry.get(provider_name)?;
 
     match &args.subcommand {
