@@ -89,9 +89,9 @@ scheduler:
 | Provider | Status | Auth |
 |---|---|---|
 | Porkbun | ✅ Full | `api_key` + `secret_api_key` |
-| Cloudflare | ✅ DNS | `api_token` (Bearer) |
-| GoDaddy | 🔧 Skeleton | `api_key:api_secret` |
-| Namecheap | 🔧 Skeleton | XML API — roadmap |
+| Cloudflare | ✅ Full | `api_token` (Bearer) |
+| GoDaddy | ✅ Full | `api_key` + `api_secret` |
+| Namecheap | ✅ Full | `api_user` + `api_key` (XML API) |
 
 ## Output formats
 
