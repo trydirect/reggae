@@ -44,3 +44,5 @@ stacker deploy --target cloud --watch
 
 - `/` - home page
 - `/contact/` - contact page
+
+Next, we can try to configure cloud firewall and proxy.
