@@ -6,13 +6,29 @@ providers:
     secret_api_key: ""
   cloudflare:
     api_token: ""
+    account_id: ""
   godaddy:
     api_key: ""
     api_secret: ""
+    sandbox: false
+    consent_ip: ""
   namecheap:
     api_user: ""
     api_key: ""
     username: ""
+    client_ip: ""
+    sandbox: false
+
+registrant:
+  first_name: ""
+  last_name: ""
+  email: ""
+  phone: ""
+  address1: ""
+  city: ""
+  state: ""
+  country: ""
+  postal_code: ""
 
 scheduler:
   enabled: false
