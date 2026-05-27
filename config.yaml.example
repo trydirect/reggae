@@ -4,6 +4,11 @@ providers:
   porkbun:
     api_key: ""
     secret_api_key: ""
+  # Cloudflare token permissions:
+  #   DNS only:           Zone/Zone/Read + Zone/DNS/Edit
+  #   DNS + Registrar:    Zone/Zone/Edit + Zone/DNS/Edit + Account/Registrar/Edit
+  # account_id is required for Registrar API (register, renew, transfer).
+  # Found in the right sidebar of the Cloudflare dashboard.
   cloudflare:
     api_token: ""
     account_id: ""

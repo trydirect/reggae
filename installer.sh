@@ -74,10 +74,21 @@ providers:
   # ── Cloudflare ───────────────────────────────────────────────────────────
   # Env vars: DM_PROVIDERS_CLOUDFLARE_API_TOKEN, DM_PROVIDERS_CLOUDFLARE_ACCOUNT_ID
   # Create a token at: https://dash.cloudflare.com/profile/api-tokens
-  # account_id is required for Registrar API (domain purchase/transfer).
+  #
+  # Required token permissions:
+  #   DNS only:
+  #     Zone / Zone / Read      — look up zone by domain name
+  #     Zone / DNS  / Edit      — list, create, update, delete DNS records
+  #   DNS + Registrar (register, renew, transfer domains):
+  #     Zone / Zone / Edit      — create a new zone on domain registration
+  #     Zone / DNS  / Edit      — as above
+  #     Account / Registrar / Edit  — registrar API (/accounts/{id}/registrar/...)
+  #
+  # Zone resource scope: "All zones" or limit to specific zones.
+  # account_id is required for any Registrar API operation.
   # cloudflare:
-  #   api_token: ""      # Bearer token — needs Zone:Edit + Account:Registrar:Edit
-  #   account_id: ""     # Found in the right sidebar of your Cloudflare dashboard
+  #   api_token: ""      # Bearer token with the permissions listed above
+  #   account_id: ""     # Found in the right sidebar of the Cloudflare dashboard
 
   # ── GoDaddy ──────────────────────────────────────────────────────────────
   # Env vars: DM_PROVIDERS_GODADDY_API_KEY, DM_PROVIDERS_GODADDY_API_SECRET
