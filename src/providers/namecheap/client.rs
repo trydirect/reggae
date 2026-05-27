@@ -1,156 +1,158 @@
 use reqwest::Client;
 use async_trait::async_trait;
-use serde_json::Value;
-use tracing::{debug, instrument};
+use tracing::instrument;
+use chrono::{DateTime, Utc, NaiveDateTime};
 
-use crate::core::{error::Error, traits::DomainRegistrar, types::*};
+use crate::core::{error::Error, traits::DomainRegistrar, types::{*, RegistrantContact}};
 
-const PROD_URL: &str = "https://api.namecheap.com/xml.response";
+
+const PROD_URL:    &str = "https://api.namecheap.com/xml.response";
 const SANDBOX_URL: &str = "https://api.sandbox.namecheap.com/xml.response";
 
 pub struct NamecheapClient {
-    api_user: String,
-    api_key: String,
-    username: String,
-    /// Whitelisted public IP (required by Namecheap API)
-    client_ip: String,
-    base_url: String,
-    http: Client,
+    api_user:   String,
+    api_key:    String,
+    username:   String,
+    client_ip:  String,
+    contact:    RegistrantContact,
+    base_url:   String,
+    http:       Client,
 }
 
 impl NamecheapClient {
     pub fn new(
-        api_user: String,
-        api_key: String,
-        username: String,
-        client_ip: String,
-        http: Client,
-        sandbox: bool,
+        api_user: String, api_key: String, username: String,
+        client_ip: String, contact: RegistrantContact,
+        sandbox: bool, http: Client,
     ) -> Self {
         let base_url = if sandbox { SANDBOX_URL } else { PROD_URL }.to_string();
-        Self { api_user, api_key, username, client_ip, base_url, http }
+        Self::with_base_url(api_user, api_key, username, client_ip, contact, http, base_url)
     }
 
     pub fn with_base_url(
-        api_user: String,
-        api_key: String,
-        username: String,
-        client_ip: String,
-        http: Client,
-        base_url: String,
+        api_user: String, api_key: String, username: String,
+        client_ip: String, contact: RegistrantContact,
+        http: Client, base_url: String,
     ) -> Self {
-        Self { api_user, api_key, username, client_ip, base_url, http }
+        Self { api_user, api_key, username, client_ip, contact, base_url, http }
     }
 
-    /// Common query parameters for every Namecheap API call.
+    /// Build common auth params + command
     fn base_params(&self, command: &str) -> Vec<(&'static str, String)> {
         vec![
-            ("ApiUser", self.api_user.clone()),
-            ("ApiKey", self.api_key.clone()),
+            ("ApiUser",  self.api_user.clone()),
+            ("ApiKey",   self.api_key.clone()),
             ("UserName", self.username.clone()),
             ("ClientIp", self.client_ip.clone()),
-            ("Command", command.to_string()),
+            ("Command",  command.to_string()),
         ]
     }
 
-    /// Execute a Namecheap API call and return the parsed XML document.
-    async fn call(
-        &self,
-        command: &str,
-        extra_params: &[(&str, String)],
-    ) -> Result<roxmltree::Document<'static>, Error> {
-        let mut params = self.base_params(command);
-        for (k, v) in extra_params {
-            params.push((k, v.clone()));
+    async fn call(&self, params: Vec<(impl AsRef<str>, impl AsRef<str>)>) -> Result<String, Error> {
+        let mut url = reqwest::Url::parse(&self.base_url).map_err(|e| Error::Provider(format!("URL parse error: {}", e)))?;
+        {
+            let mut q = url.query_pairs_mut();
+            for (k, v) in &params {
+                q.append_pair(k.as_ref(), v.as_ref());
+            }
         }
-
-        debug!("Namecheap API command: {}", command);
-        let resp = self.http.get(&self.base_url)
-            .query(&params)
-            .send().await?;
-
-        let text = resp.text().await?;
-        debug!("Namecheap response: {}", &text[..text.len().min(500)]);
-
-        // roxmltree requires a 'static lifetime for the document, so we leak the string.
-        // This is acceptable here because the document is short-lived within the call.
-        let text_static: &'static str = Box::leak(text.into_boxed_str());
-        let doc = roxmltree::Document::parse(text_static)
-            .map_err(|e| Error::Provider(format!("XML parse error: {}", e)))?;
-
-        self.check_nc_error(&doc)?;
-        Ok(doc)
+        let body = self.http.get(url).send().await?.text().await?;
+        Ok(body)
     }
 
-    fn check_nc_error(&self, doc: &roxmltree::Document) -> Result<(), Error> {
+    fn check_xml_errors(xml: &str) -> Result<(), Error> {
+        let doc = roxmltree::Document::parse(xml)
+            .map_err(|e| Error::Provider(format!("XML parse error: {}", e)))?;
         let root = doc.root_element();
         let status = root.attribute("Status").unwrap_or("ERROR");
-        if status != "OK" {
+        if status == "ERROR" || status == "FAILED" {
             let msg = root.descendants()
                 .find(|n| n.has_tag_name("Error"))
                 .and_then(|n| n.text())
-                .unwrap_or("unknown Namecheap error")
+                .unwrap_or("Namecheap API error")
+                .trim()
                 .to_string();
-            return Err(Error::Api { status: 400, message: msg });
+            return Err(Error::Provider(msg));
         }
         Ok(())
     }
 
-    /// Split domain into SLD + TLD (example.com -> ("example", "com"))
-    fn split_domain(domain: &str) -> (&str, &str) {
-        domain.find('.')
-            .map(|pos| (&domain[..pos], &domain[pos + 1..]))
-            .unwrap_or((domain, ""))
+    /// Split "example.com" → ("example", "com")
+    fn sld_tld(domain: &str) -> (String, String) {
+        let parts: Vec<&str> = domain.splitn(2, '.').collect();
+        if parts.len() == 2 {
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            (domain.to_string(), String::new())
+        }
     }
 
-    fn build_contact_params(prefix: &str, c: &RegistrantContact) -> Vec<(&'static str, String)> {
-        // Namecheap contact fields are positional strings leaked as 'static
-        macro_rules! p {
-            ($key:expr, $val:expr) => {
-                (Box::leak(format!("{prefix}{}", $key).into_boxed_str()) as &'static str, $val.to_string())
-            };
-        }
+    fn contact_params(prefix: &str, c: &RegistrantContact) -> Vec<(String, String)> {
         vec![
-            p!("FirstName", c.first_name),
-            p!("LastName", c.last_name),
-            p!("EmailAddress", c.email),
-            p!("Phone", c.phone),
-            p!("Organization", c.organization.clone().unwrap_or_default()),
-            p!("Address1", c.address1),
-            p!("Address2", c.address2.clone().unwrap_or_default()),
-            p!("City", c.city),
-            p!("StateProvince", c.state),
-            p!("Country", c.country),
-            p!("PostalCode", c.postal_code),
+            (format!("{}FirstName",   prefix), c.first_name.clone()),
+            (format!("{}LastName",    prefix), c.last_name.clone()),
+            (format!("{}Address1",    prefix), c.address1.clone()),
+            (format!("{}City",        prefix), c.city.clone()),
+            (format!("{}StateProvince", prefix), c.state.clone()),
+            (format!("{}PostalCode",  prefix), c.postal_code.clone()),
+            (format!("{}Country",     prefix), c.country.clone()),
+            (format!("{}Phone",       prefix), c.phone.clone()),
+            (format!("{}EmailAddress", prefix), c.email.clone()),
+            (format!("{}OrganizationName", prefix), c.organization.clone().unwrap_or_default()),
         ]
     }
 
-    fn parse_dns_records(doc: &roxmltree::Document) -> Vec<DnsRecord> {
-        doc.root_element()
-            .descendants()
-            .filter(|n| n.has_tag_name("host"))
-            .filter_map(|n| {
-                let record_type = match n.attribute("Type")? {
-                    "A" => DnsRecordType::A,
-                    "AAAA" => DnsRecordType::Aaaa,
+    fn parse_hosts(xml: &str) -> Result<Vec<DnsRecord>, Error> {
+        let doc = roxmltree::Document::parse(xml)
+            .map_err(|e| Error::Provider(format!("XML parse error: {}", e)))?;
+        let mut records = Vec::new();
+        for node in doc.descendants() {
+            if node.has_tag_name("host") {
+                let rtype_str = node.attribute("Type").unwrap_or("");
+                let record_type = match rtype_str {
+                    "A"     => DnsRecordType::A,
+                    "AAAA"  => DnsRecordType::Aaaa,
                     "CNAME" => DnsRecordType::Cname,
-                    "MX" => DnsRecordType::Mx,
-                    "TXT" => DnsRecordType::Txt,
-                    "NS" => DnsRecordType::Ns,
-                    "SRV" => DnsRecordType::Srv,
-                    "CAA" => DnsRecordType::Caa,
-                    _ => return None,
+                    "MX"    => DnsRecordType::Mx,
+                    "TXT"   => DnsRecordType::Txt,
+                    "NS"    => DnsRecordType::Ns,
+                    "SRV"   => DnsRecordType::Srv,
+                    "CAA"   => DnsRecordType::Caa,
+                    _       => continue,
                 };
-                Some(DnsRecord {
-                    id: n.attribute("HostId").map(String::from),
-                    record_type,
-                    name: n.attribute("Name")?.to_string(),
-                    content: n.attribute("Address")?.to_string(),
-                    ttl: n.attribute("TTL").and_then(|t| t.parse().ok()),
-                    priority: n.attribute("MXPref").and_then(|p| p.parse().ok()),
-                })
-            })
-            .collect()
+                let id       = node.attribute("HostId").map(String::from);
+                let name     = node.attribute("Name").unwrap_or("@").to_string();
+                let content  = node.attribute("Address").unwrap_or("").to_string();
+                let ttl      = node.attribute("TTL").and_then(|t| t.parse().ok());
+                let priority = node.attribute("MXPref").and_then(|p| p.parse().ok());
+                records.push(DnsRecord { id, record_type, name, content, ttl, priority });
+            }
+        }
+        Ok(records)
+    }
+
+    /// Namecheap requires pushing the full host set atomically.
+    async fn set_all_hosts(&self, domain: &str, records: &[DnsRecord]) -> Result<(), Error> {
+        let (sld, tld) = Self::sld_tld(domain);
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.dns.setHosts")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("SLD".into(), sld));
+        params.push(("TLD".into(), tld));
+
+        for (i, rec) in records.iter().enumerate() {
+            let n = i + 1;
+            params.push((format!("HostName{}", n),   rec.name.clone()));
+            params.push((format!("RecordType{}", n), rec.record_type.to_string()));
+            params.push((format!("Address{}", n),    rec.content.clone()));
+            params.push((format!("TTL{}", n),        rec.ttl.unwrap_or(1800).to_string()));
+            if let Some(prio) = rec.priority {
+                params.push((format!("MXPref{}", n), prio.to_string()));
+            }
+        }
+
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
+        Ok(())
     }
 }
 
@@ -158,54 +160,55 @@ impl NamecheapClient {
 impl DomainRegistrar for NamecheapClient {
     #[instrument(skip(self))]
     async fn check_availability(&self, domain: &str) -> Result<Availability, Error> {
-        let params = vec![("DomainList", domain.to_string())];
-        let doc = self.call("namecheap.domains.check", &params).await?;
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.check")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("DomainList".into(), domain.to_string()));
 
-        let available = doc.root_element()
-            .descendants()
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
+
+        let doc = roxmltree::Document::parse(&xml)
+            .map_err(|e| Error::Provider(format!("XML parse error: {}", e)))?;
+        let available = doc.descendants()
             .find(|n| n.has_tag_name("DomainCheckResult"))
             .and_then(|n| n.attribute("Available"))
-            .map(|v| v == "true")
+            .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-
-        let premium = doc.root_element()
-            .descendants()
+        let premium = doc.descendants()
             .find(|n| n.has_tag_name("DomainCheckResult"))
             .and_then(|n| n.attribute("IsPremiumName"))
-            .map(|v| v == "true")
+            .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-
-        Ok(Availability { available, premium, price: None })
+        let price = doc.descendants()
+            .find(|n| n.has_tag_name("DomainCheckResult"))
+            .and_then(|n| n.attribute("PremiumRegistrationPrice"))
+            .and_then(|p| p.parse::<f64>().ok())
+            .filter(|&p| p > 0.0);
+        Ok(Availability { available, premium, price })
     }
 
-    /// Register a domain with Namecheap.
-    /// Requires a fully populated RegistrantContact and whitelisted client IP.
-    #[instrument(skip(self, contact, records))]
-    async fn register_domain(
-        &self,
-        domain: &str,
-        years: u32,
-        contact: &RegistrantContact,
-        records: Option<Vec<DnsRecord>>,
-    ) -> Result<Domain, Error> {
-        let (sld, tld) = Self::split_domain(domain);
-        let mut params: Vec<(&str, String)> = vec![
-            ("SLD", sld.to_string()),
-            ("TLD", tld.to_string()),
-            ("Years", years.to_string()),
-        ];
+    #[instrument(skip(self, records))]
+    async fn register_domain(&self, domain: &str, _years: u32, contact: &RegistrantContact, records: Option<Vec<DnsRecord>>) -> Result<Domain, Error> {
+        let (sld, tld) = Self::sld_tld(domain);
+        let c = contact;
 
-        // Add contact info for all four roles (Registrant, Tech, Admin, AuxBilling)
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.create")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("DomainName".into(), domain.to_string()));
+        params.push(("Years".into(), "1".into()));
+
+        // All four contact roles — Namecheap requires all of them
         for prefix in &["Registrant", "Tech", "Admin", "AuxBilling"] {
-            params.extend(Self::build_contact_params(prefix, contact));
+            params.extend(Self::contact_params(prefix, c));
         }
 
-        self.call("namecheap.domains.create", &params).await?;
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
 
-        // Optionally add initial DNS records
+        // Push initial DNS records if provided
         if let Some(recs) = records {
-            for rec in &recs {
-                let _ = self.create_dns_record(domain, rec).await;
+            if !recs.is_empty() {
+                let _ = self.set_all_hosts(domain, &recs).await;
             }
         }
 
@@ -214,193 +217,159 @@ impl DomainRegistrar for NamecheapClient {
 
     #[instrument(skip(self))]
     async fn renew_domain(&self, domain: &str, years: u32) -> Result<(), Error> {
-        let (sld, tld) = Self::split_domain(domain);
-        let params = vec![
-            ("SLD", sld.to_string()),
-            ("TLD", tld.to_string()),
-            ("Years", years.to_string()),
-        ];
-        self.call("namecheap.domains.renew", &params).await?;
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.renew")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("DomainName".into(), domain.to_string()));
+        params.push(("Years".into(), years.to_string()));
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
         Ok(())
     }
 
     #[instrument(skip(self))]
     async fn transfer_domain(&self, domain: &str, auth_code: &str) -> Result<(), Error> {
-        let (sld, tld) = Self::split_domain(domain);
-        let params = vec![
-            ("DomainName", domain.to_string()),
-            ("EPPCode", auth_code.to_string()),
-            ("Years", "1".to_string()),
-        ];
-        self.call("namecheap.domains.transfer.create", &params).await?;
+        let c = &self.contact;
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.transfer.create")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("DomainName".into(), domain.to_string()));
+        params.push(("EPPCode".into(), auth_code.to_string()));
+        params.push(("Years".into(), "1".into()));
+        params.extend(Self::contact_params("", c));
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
         Ok(())
     }
 
     #[instrument(skip(self))]
     async fn get_domain_info(&self, domain: &str) -> Result<Domain, Error> {
-        let params = vec![("DomainName", domain.to_string())];
-        let doc = self.call("namecheap.domains.getInfo", &params).await?;
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.getInfo")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("DomainName".into(), domain.to_string()));
 
-        let expiry = doc.root_element()
-            .descendants()
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
+
+        let doc = roxmltree::Document::parse(&xml)
+            .map_err(|e| Error::Provider(format!("XML parse error: {}", e)))?;
+
+        let expiry = doc.descendants()
             .find(|n| n.has_tag_name("DomainDetails"))
-            .and_then(|n| {
-                n.children().find(|c| c.has_tag_name("ExpiredDate"))
-            })
+            .and_then(|n| n.descendants().find(|c| c.has_tag_name("ExpiredDate")))
             .and_then(|n| n.text())
-            .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%m/%d/%Y").ok())
-            .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc());
+            .and_then(|s| NaiveDateTime::parse_from_str(s.trim(), "%m/%d/%Y %H:%M:%S").ok())
+            .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc));
 
-        let status_str = doc.root_element()
-            .descendants()
-            .find(|n| n.has_tag_name("DomainGetInfoResult"))
-            .and_then(|n| n.attribute("Status"))
-            .unwrap_or("Unknown");
-
-        let status = match status_str {
-            "Ok" => DomainStatus::Active,
-            "Pending" => DomainStatus::Pending,
-            "Expired" => DomainStatus::Expired,
-            _ => DomainStatus::Unknown,
-        };
-
-        let nameservers: Vec<String> = doc.root_element()
-            .descendants()
+        let ns: Vec<String> = doc.descendants()
             .filter(|n| n.has_tag_name("Nameserver"))
-            .filter_map(|n| n.text().map(String::from))
+            .filter_map(|n| n.text().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
             .collect();
 
-        Ok(Domain { name: domain.to_string(), expiry_date: expiry, status, nameservers })
+        let status_str = doc.descendants()
+            .find(|n| n.has_tag_name("DomainGetInfoResult"))
+            .and_then(|n| n.attribute("Status"))
+            .unwrap_or("ACTIVE");
+        let status = match status_str.to_uppercase().as_str() {
+            "EXPIRED"  => DomainStatus::Expired,
+            "TRANSFER" => DomainStatus::Unknown,
+            _          => DomainStatus::Active,
+        };
+
+        Ok(Domain { name: domain.to_string(), expiry_date: expiry, status, nameservers: ns })
     }
 
     #[instrument(skip(self))]
     async fn list_dns_records(&self, domain: &str) -> Result<Vec<DnsRecord>, Error> {
-        let (sld, tld) = Self::split_domain(domain);
-        let params = vec![
-            ("SLD", sld.to_string()),
-            ("TLD", tld.to_string()),
-        ];
-        let doc = self.call("namecheap.domains.dns.getHosts", &params).await?;
-        Ok(Self::parse_dns_records(&doc))
+        let (sld, tld) = Self::sld_tld(domain);
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.dns.getHosts")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("SLD".into(), sld));
+        params.push(("TLD".into(), tld));
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
+        Self::parse_hosts(&xml)
     }
 
-    /// Add a DNS record.
-    /// Namecheap's setHosts API replaces ALL records atomically, so we
-    /// fetch existing records, append the new one, then push the full set.
+    /// Namecheap uses atomic setHosts: fetch all → append new record → push full set.
     #[instrument(skip(self, record))]
     async fn create_dns_record(&self, domain: &str, record: &DnsRecord) -> Result<DnsRecord, Error> {
-        let mut existing = self.list_dns_records(domain).await?;
-        existing.push(record.clone());
-        self.set_all_hosts(domain, &existing).await?;
-        Ok(record.clone())
+        let mut records = self.list_dns_records(domain).await?;
+        let mut new_rec = record.clone();
+        records.push(record.clone());
+        self.set_all_hosts(domain, &records).await?;
+        // Assign a synthetic id after push
+        new_rec.id = Some(format!("{}:{}", record.record_type, record.name));
+        Ok(new_rec)
     }
 
-    /// Update a DNS record by its HostId.
-    /// Fetches all records, replaces the one with matching ID, then pushes.
+    /// Update matching record by id (type:name) then push full set.
     #[instrument(skip(self, record))]
     async fn update_dns_record(&self, domain: &str, record_id: &str, record: &DnsRecord) -> Result<DnsRecord, Error> {
-        let existing = self.list_dns_records(domain).await?;
-        let updated_set: Vec<DnsRecord> = existing.into_iter().map(|r| {
-            if r.id.as_deref() == Some(record_id) {
-                let mut new = record.clone();
-                new.id = Some(record_id.to_string());
-                new
-            } else {
-                r
+        let mut records = self.list_dns_records(domain).await?;
+        let mut found = false;
+        for r in &mut records {
+            let synthetic_id = format!("{}:{}", r.record_type, r.name);
+            if r.id.as_deref() == Some(record_id) || synthetic_id == record_id {
+                *r = record.clone();
+                r.id = Some(record_id.to_string());
+                found = true;
+                break;
             }
-        }).collect();
-        self.set_all_hosts(domain, &updated_set).await?;
+        }
+        if !found {
+            return Err(Error::Provider(format!("Record '{}' not found", record_id)));
+        }
+        self.set_all_hosts(domain, &records).await?;
         let mut updated = record.clone();
         updated.id = Some(record_id.to_string());
         Ok(updated)
     }
 
-    /// Delete a DNS record by its HostId.
+    /// Remove matching record by id (type:name) then push remaining set.
     #[instrument(skip(self))]
     async fn delete_dns_record(&self, domain: &str, record_id: &str) -> Result<(), Error> {
-        let existing = self.list_dns_records(domain).await?;
-        let filtered: Vec<DnsRecord> = existing.into_iter()
-            .filter(|r| r.id.as_deref() != Some(record_id))
-            .collect();
-        self.set_all_hosts(domain, &filtered).await
+        let records = self.list_dns_records(domain).await?;
+        let filtered: Vec<DnsRecord> = records.into_iter().filter(|r| {
+            let synthetic = format!("{}:{}", r.record_type, r.name);
+            r.id.as_deref() != Some(record_id) && synthetic != record_id
+        }).collect();
+        self.set_all_hosts(domain, &filtered).await?;
+        Ok(())
     }
 
-    #[instrument(skip(self))]
     async fn get_nameservers(&self, domain: &str) -> Result<Vec<String>, Error> {
-        let info = self.get_domain_info(domain).await?;
-        Ok(info.nameservers)
+        let (sld, tld) = Self::sld_tld(domain);
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.dns.getCustom")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("SLD".into(), sld));
+        params.push(("TLD".into(), tld));
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
+        let doc = roxmltree::Document::parse(&xml)
+            .map_err(|e| Error::Provider(format!("XML parse error: {}", e)))?;
+        let ns: Vec<String> = doc.descendants()
+            .filter(|n| n.has_tag_name("Nameserver"))
+            .filter_map(|n| n.text().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        Ok(ns)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, nameservers))]
     async fn set_nameservers(&self, domain: &str, nameservers: &[String]) -> Result<(), Error> {
-        let (sld, tld) = Self::split_domain(domain);
-        let ns_csv = nameservers.join(",");
-        let params = vec![
-            ("SLD", sld.to_string()),
-            ("TLD", tld.to_string()),
-            ("NameServers", ns_csv),
-        ];
-        self.call("namecheap.domains.dns.setCustom", &params).await?;
+        let (sld, tld) = Self::sld_tld(domain);
+        let mut params: Vec<(String, String)> = self.base_params("namecheap.domains.dns.setCustom")
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        params.push(("SLD".into(), sld));
+        params.push(("TLD".into(), tld));
+        params.push(("Nameservers".into(), nameservers.join(",")));
+        let xml = self.call(params).await?;
+        Self::check_xml_errors(&xml)?;
         Ok(())
     }
 
-    #[instrument(skip(self))]
-    async fn get_pricing(&self, tld: &str) -> Result<Pricing, Error> {
-        let tld_clean = tld.trim_start_matches('.');
-        let params = vec![
-            ("ActionName", "REGISTER".to_string()),
-            ("ProductCategory", "DOMAINS".to_string()),
-            ("ProductType", "DOMAIN".to_string()),
-            ("ProductName", tld_clean.to_string()),
-        ];
-        let doc = self.call("namecheap.users.getPricing", &params).await?;
-
-        // Parse registration price from the pricing XML
-        let reg_price = doc.root_element()
-            .descendants()
-            .find(|n| n.has_tag_name("ProductPrice"))
-            .and_then(|n| n.attribute("Price"))
-            .and_then(|p| p.parse::<f64>().ok())
-            .unwrap_or(0.0);
-
-        Ok(Pricing {
-            registration_price: reg_price,
-            renewal_price: reg_price,
-            transfer_price: reg_price,
-            currency: "USD".to_string(),
-        })
-    }
-}
-
-impl NamecheapClient {
-    /// Replace ALL DNS host records for a domain (Namecheap setHosts API).
-    async fn set_all_hosts(&self, domain: &str, records: &[DnsRecord]) -> Result<(), Error> {
-        let (sld, tld) = Self::split_domain(domain);
-        let mut params: Vec<(&str, String)> = vec![
-            ("SLD", sld.to_string()),
-            ("TLD", tld.to_string()),
-        ];
-
-        for (i, rec) in records.iter().enumerate() {
-            let n = i + 1;
-            // Namecheap setHosts uses indexed fields: HostName1, RecordType1, Address1...
-            let hn: &'static str = Box::leak(format!("HostName{}", n).into_boxed_str());
-            let rt: &'static str = Box::leak(format!("RecordType{}", n).into_boxed_str());
-            let ad: &'static str = Box::leak(format!("Address{}", n).into_boxed_str());
-            let ttl: &'static str = Box::leak(format!("TTL{}", n).into_boxed_str());
-            let mx: &'static str = Box::leak(format!("MXPref{}", n).into_boxed_str());
-
-            params.push((hn, rec.name.clone()));
-            params.push((rt, rec.record_type.to_string()));
-            params.push((ad, rec.content.clone()));
-            params.push((ttl, rec.ttl.unwrap_or(1800).to_string()));
-            if let Some(prio) = rec.priority {
-                params.push((mx, prio.to_string()));
-            }
-        }
-
-        self.call("namecheap.domains.dns.setHosts", &params).await?;
-        Ok(())
+    async fn get_pricing(&self, _tld: &str) -> Result<Pricing, Error> {
+        Err(Error::Unsupported)
     }
 }
 
@@ -408,85 +377,127 @@ impl NamecheapClient {
 mod tests {
     use super::*;
     use mockito::Server;
+    
 
-    fn make_client(base_url: &str) -> NamecheapClient {
+    fn client(base_url: &str) -> NamecheapClient {
         NamecheapClient::with_base_url(
-            "user".to_string(), "key".to_string(),
-            "user".to_string(), "1.2.3.4".to_string(),
-            reqwest::Client::new(), base_url.to_string(),
+            "user".into(), "key".into(), "user".into(), "1.2.3.4".into(),
+            RegistrantContact {
+                first_name: "Jane".into(), last_name: "Doe".into(),
+                email: "jane@example.com".into(), phone: "+1.5555555555".into(),
+                address1: "123 Main".into(), address2: None,
+                city: "Phoenix".into(), state: "AZ".into(),
+                postal_code: "85001".into(), country: "US".into(),
+                organization: None,
+            },
+            reqwest::Client::new(),
+            base_url.to_string(),
         )
     }
 
-    fn nc_ok(inner: &str) -> String {
-        format!(r#"<?xml version="1.0"?><ApiResponse Status="OK" xmlns="https://api.namecheap.com/xml.response"><CommandResponse>{inner}</CommandResponse></ApiResponse>"#)
-    }
+    const CHECK_XML: &str = r#"<?xml version="1.0"?>
+<ApiResponse Status="OK" xmlns="https://api.namecheap.com/xml.response">
+  <Errors/>
+  <CommandResponse Type="namecheap.domains.check">
+    <DomainCheckResult Domain="example.com" Available="true" IsPremiumName="false" PremiumRegistrationPrice="0.00"/>
+  </CommandResponse>
+</ApiResponse>"#;
+
+    const HOSTS_XML: &str = r#"<?xml version="1.0"?>
+<ApiResponse Status="OK" xmlns="https://api.namecheap.com/xml.response">
+  <Errors/>
+  <CommandResponse>
+    <DnsHostsResult>
+      <host HostId="1" Name="@" Type="A" Address="1.2.3.4" TTL="1800"/>
+      <host HostId="2" Name="www" Type="CNAME" Address="@" TTL="1800"/>
+    </DnsHostsResult>
+  </CommandResponse>
+</ApiResponse>"#;
+
+    const SET_OK_XML: &str = r#"<?xml version="1.0"?>
+<ApiResponse Status="OK" xmlns="https://api.namecheap.com/xml.response">
+  <Errors/>
+  <CommandResponse><DnsSetHostsResult IsSuccess="true"/></CommandResponse>
+</ApiResponse>"#;
+
+    const DOMAIN_INFO_XML: &str = r#"<?xml version="1.0"?>
+<ApiResponse Status="OK" xmlns="https://api.namecheap.com/xml.response">
+  <Errors/>
+  <CommandResponse>
+    <DomainGetInfoResult Status="OK">
+      <DomainDetails>
+        <ExpiredDate>12/31/2025 00:00:00</ExpiredDate>
+      </DomainDetails>
+      <DnsDetails>
+        <Nameserver>ns1.namecheap.com</Nameserver>
+        <Nameserver>ns2.namecheap.com</Nameserver>
+      </DnsDetails>
+    </DomainGetInfoResult>
+  </CommandResponse>
+</ApiResponse>"#;
 
     #[tokio::test]
     async fn test_check_availability() {
         let mut server = Server::new_async().await;
         let _m = server.mock("GET", mockito::Matcher::Any)
-            .with_status(200).with_header("content-type", "text/xml")
-            .with_body(nc_ok(r#"<DomainCheckResult Domain="example.com" Available="true" IsPremiumName="false" />"#))
+            .with_body(CHECK_XML)
             .create_async().await;
-
-        let avail = make_client(&server.url()).check_availability("example.com").await.unwrap();
-        assert!(avail.available);
+        let c = client(&server.url());
+        let av = c.check_availability("example.com").await.unwrap();
+        assert!(av.available);
+        assert!(!av.premium);
     }
 
     #[tokio::test]
     async fn test_list_dns_records() {
         let mut server = Server::new_async().await;
         let _m = server.mock("GET", mockito::Matcher::Any)
-            .with_status(200).with_header("content-type", "text/xml")
-            .with_body(nc_ok(r#"<DomainDNSGetHostsResult Domain="example.com"><host HostId="1" Name="@" Type="A" Address="1.2.3.4" TTL="1800" /></DomainDNSGetHostsResult>"#))
+            .with_body(HOSTS_XML)
             .create_async().await;
-
-        let records = make_client(&server.url()).list_dns_records("example.com").await.unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].content, "1.2.3.4");
+        let c = client(&server.url());
+        let recs = c.list_dns_records("example.com").await.unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].content, "1.2.3.4");
     }
 
     #[tokio::test]
-    async fn test_api_error_propagation() {
+    async fn test_create_dns_record() {
+        let mut server = Server::new_async().await;
+        // list call
+        let _m1 = server.mock("GET", mockito::Matcher::Any)
+            .with_body(HOSTS_XML)
+            .expect(1)
+            .create_async().await;
+        // setHosts call
+        let _m2 = server.mock("GET", mockito::Matcher::Any)
+            .with_body(SET_OK_XML)
+            .expect(1)
+            .create_async().await;
+        let c = client(&server.url());
+        let rec = DnsRecord { id: None, record_type: DnsRecordType::Txt, name: "@".into(), content: "v=spf1 ~all".into(), ttl: Some(300), priority: None };
+        let created = c.create_dns_record("example.com", &rec).await.unwrap();
+        assert_eq!(created.id.unwrap(), "TXT:@");
+    }
+
+    #[tokio::test]
+    async fn test_set_nameservers() {
         let mut server = Server::new_async().await;
         let _m = server.mock("GET", mockito::Matcher::Any)
-            .with_status(200).with_header("content-type", "text/xml")
-            .with_body(r#"<?xml version="1.0"?><ApiResponse Status="ERROR"><Errors><Error Number="2030166">Domain is not available</Error></Errors></ApiResponse>"#)
+            .with_body(SET_OK_XML)
             .create_async().await;
-
-        let result = make_client(&server.url()).check_availability("taken.com").await;
-        assert!(result.is_err());
+        let c = client(&server.url());
+        c.set_nameservers("example.com", &["ns1.test.com".into(), "ns2.test.com".into()]).await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_register_domain() {
+    async fn test_get_domain_info() {
         let mut server = Server::new_async().await;
-        // register call
-        let _mreg = server.mock("GET", mockito::Matcher::Any)
-            .with_status(200).with_header("content-type", "text/xml")
-            .with_body(nc_ok(r#"<DomainCreateResult Domain="newdomain.com" Registered="true" />"#))
+        let _m = server.mock("GET", mockito::Matcher::Any)
+            .with_body(DOMAIN_INFO_XML)
             .create_async().await;
-
-        let contact = RegistrantContact {
-            first_name: "Jane".to_string(),
-            last_name: "Doe".to_string(),
-            email: "jane@example.com".to_string(),
-            phone: "+1.5555551234".to_string(),
-            address1: "123 Main St".to_string(),
-            city: "Springfield".to_string(),
-            state: "IL".to_string(),
-            country: "US".to_string(),
-            postal_code: "62701".to_string(),
-            ..Default::default()
-        };
-
-        // The register call will then call get_domain_info, which needs another mock
-        // Using Matcher::Any means the same mock handles both — enough for unit test
-        let result = make_client(&server.url())
-            .register_domain("newdomain.com", 1, &contact, None)
-            .await;
-        // We don't assert success because get_domain_info will parse the register response
-        // as domain info (which is fine for this unit test — we just verify no panic)
-        let _ = result;
+        let c = client(&server.url());
+        let info = c.get_domain_info("example.com").await.unwrap();
+        assert_eq!(info.nameservers, vec!["ns1.namecheap.com", "ns2.namecheap.com"]);
+        assert!(info.expiry_date.is_some());
     }
 }

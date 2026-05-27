@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
             "cloudflare",
             Box::new(CloudflareClient::new(
                 settings.providers.cloudflare.api_token.clone(),
+                settings.providers.cloudflare.account_id.clone(),
                 http.clone(),
             )),
         );
@@ -63,8 +64,10 @@ async fn main() -> Result<()> {
             Box::new(GodaddyClient::new(
                 settings.providers.godaddy.api_key.clone(),
                 settings.providers.godaddy.api_secret.clone(),
-                http.clone(),
+                settings.providers.godaddy.consent_ip.clone(),
+                settings.providers.godaddy.contact.clone(),
                 settings.providers.godaddy.sandbox,
+                http.clone(),
             )),
         );
     }
@@ -76,8 +79,9 @@ async fn main() -> Result<()> {
                 settings.providers.namecheap.api_key.clone(),
                 settings.providers.namecheap.username.clone(),
                 settings.providers.namecheap.client_ip.clone(),
-                http.clone(),
+                settings.providers.namecheap.contact.clone(),
                 settings.providers.namecheap.sandbox,
+                http.clone(),
             )),
         );
     }

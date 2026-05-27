@@ -45,6 +45,9 @@ pub struct PorkbunConfig {
 pub struct CloudflareConfig {
     #[serde(default)]
     pub api_token: String,
+    /// Account ID — required for Registrar API operations
+    #[serde(default)]
+    pub account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -53,9 +56,18 @@ pub struct GodaddyConfig {
     pub api_key: String,
     #[serde(default)]
     pub api_secret: String,
-    /// Use OTE (sandbox) endpoint
+    /// Use OTE (sandbox) endpoint instead of production
     #[serde(default)]
     pub sandbox: bool,
+    /// Client IP included in GoDaddy purchase consent payload
+    #[serde(default = "default_consent_ip")]
+    pub consent_ip: String,
+    #[serde(default)]
+    pub contact: RegistrantContact,
+}
+
+fn default_consent_ip() -> String {
+    "0.0.0.0".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -72,6 +84,8 @@ pub struct NamecheapConfig {
     /// Use sandbox endpoint (api.sandbox.namecheap.com)
     #[serde(default)]
     pub sandbox: bool,
+    #[serde(default)]
+    pub contact: RegistrantContact,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
