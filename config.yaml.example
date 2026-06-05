@@ -23,6 +23,36 @@ providers:
     username: ""
     client_ip: ""
     sandbox: false
+  # Gandi uses Personal Access Tokens (PAT) created at https://account.gandi.net
+  # DNS is managed via the LiveDNS sub-API (zone-based, similar to Cloudflare).
+  # Sandbox requires a separate account at https://id.sandbox.gandi.net
+  gandi:
+    personal_access_token: ""
+    sandbox: false
+  # Name.com API token created at https://www.name.com/account/settings/api
+  # Use api.dev.name.com as the sandbox endpoint (separate test credentials).
+  namecom:
+    username: ""
+    api_token: ""
+    sandbox: false
+  # Dynadot has two APIs: stable XML (api3.xml) and a REST JSON Beta.
+  # api_secret is only required when use_rest_api is true.
+  # Sandbox: api-sandbox.dynadot.com — zero-cost transactions, separate credentials.
+  dynadot:
+    api_key: ""
+    api_secret: ""
+    sandbox: false
+    use_rest_api: false   # false = XML (stable), true = REST JSON (beta)
+  # IONOS API key is prefix.secret — generate at https://developer.hosting.ionos.com/keys
+  # Note: domain availability check is not officially supported by the IONOS API.
+  ionos:
+    api_prefix: ""
+    api_secret: ""
+  # Hetzner DNS API — DNS record management only (zone-based, like Cloudflare).
+  # Domain registration is not available via any Hetzner REST API.
+  # Token created at https://console.hetzner.com
+  hetzner:
+    api_token: ""
 
 registrant:
   first_name: ""

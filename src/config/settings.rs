@@ -31,6 +31,14 @@ pub struct ProvidersConfig {
     pub godaddy: GodaddyConfig,
     #[serde(default)]
     pub namecheap: NamecheapConfig,
+    #[serde(default)]
+    pub gandi: GandiConfig,
+    #[serde(default)]
+    pub namecom: NamecomConfig,
+    #[serde(default)]
+    pub dynadot: DynadotConfig,
+    #[serde(default)]
+    pub ionos: IonosConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -68,6 +76,53 @@ pub struct GodaddyConfig {
 
 fn default_consent_ip() -> String {
     "0.0.0.0".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IonosConfig {
+    /// The `prefix` part of the IONOS composite API key
+    #[serde(default)]
+    pub api_prefix: String,
+    /// The `secret` part of the IONOS composite API key
+    #[serde(default)]
+    pub api_secret: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DynadotConfig {
+    #[serde(default)]
+    pub api_key: String,
+    /// Only needed when use_rest_api is true
+    #[serde(default)]
+    pub api_secret: String,
+    #[serde(default)]
+    pub sandbox: bool,
+    /// false = stable XML API, true = REST JSON beta
+    #[serde(default)]
+    pub use_rest_api: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NamecomConfig {
+    /// Name.com account username
+    #[serde(default)]
+    pub username: String,
+    /// API token generated at name.com/account/settings/api
+    #[serde(default)]
+    pub api_token: String,
+    /// Use the test server (api.dev.name.com)
+    #[serde(default)]
+    pub sandbox: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GandiConfig {
+    /// Personal Access Token created at https://account.gandi.net
+    #[serde(default)]
+    pub personal_access_token: String,
+    /// Use the Gandi sandbox (api.sandbox.gandi.net) — requires a separate sandbox account
+    #[serde(default)]
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -203,6 +258,27 @@ impl Settings {
         if let Ok(v) = env::var("DM_PROVIDERS_NAMECHEAP_SANDBOX") {
             self.providers.namecheap.sandbox = v.to_lowercase() == "true" || v == "1";
         }
+        if let Ok(v) = env::var("DM_PROVIDERS_GANDI_PERSONAL_ACCESS_TOKEN") {
+            self.providers.gandi.personal_access_token = v;
+        }
+        if let Ok(v) = env::var("DM_PROVIDERS_GANDI_SANDBOX") {
+            self.providers.gandi.sandbox = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECOM_USERNAME") { self.providers.namecom.username = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECOM_API_TOKEN") { self.providers.namecom.api_token = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_NAMECOM_SANDBOX") {
+            self.providers.namecom.sandbox = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = env::var("DM_PROVIDERS_DYNADOT_API_KEY") { self.providers.dynadot.api_key = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_DYNADOT_API_SECRET") { self.providers.dynadot.api_secret = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_DYNADOT_SANDBOX") {
+            self.providers.dynadot.sandbox = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = env::var("DM_PROVIDERS_DYNADOT_USE_REST_API") {
+            self.providers.dynadot.use_rest_api = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = env::var("DM_PROVIDERS_IONOS_API_PREFIX") { self.providers.ionos.api_prefix = v; }
+        if let Ok(v) = env::var("DM_PROVIDERS_IONOS_API_SECRET") { self.providers.ionos.api_secret = v; }
         if let Ok(v) = env::var("DM_SCHEDULER_ENABLED") {
             self.scheduler.enabled = v.to_lowercase() == "true" || v == "1";
         }
@@ -220,7 +296,11 @@ impl Settings {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Mutex;
     use tempfile::NamedTempFile;
+
+    // Serialize all tests that read or write env vars to prevent parallel interference.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_settings() {
@@ -232,6 +312,9 @@ mod tests {
 
     #[test]
     fn test_load_from_yaml() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("DM_DEFAULT_PROVIDER");
+        std::env::remove_var("DM_LOGGING_LEVEL");
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "default_provider: cloudflare").unwrap();
         writeln!(f, "logging:").unwrap();
@@ -243,6 +326,7 @@ mod tests {
 
     #[test]
     fn test_env_overrides() {
+        let _g = ENV_LOCK.lock().unwrap();
         std::env::set_var("DM_DEFAULT_PROVIDER", "godaddy");
         std::env::set_var("DM_LOGGING_LEVEL", "warn");
         let s = Settings::load(None).unwrap();

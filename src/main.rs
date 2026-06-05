@@ -10,7 +10,11 @@ use reggae::{
     core::registry::ProviderRegistry,
     providers::{
         cloudflare::CloudflareClient,
+        dynadot::DynadotClient,
+        gandi::GandiClient,
         godaddy::GodaddyClient,
+        ionos::IonosClient,
+        namecom::NamecomClient,
         namecheap::NamecheapClient,
         porkbun::PorkbunClient,
     },
@@ -81,6 +85,47 @@ async fn main() -> Result<()> {
                 settings.providers.namecheap.client_ip.clone(),
                 settings.providers.namecheap.contact.clone(),
                 settings.providers.namecheap.sandbox,
+                http.clone(),
+            )),
+        );
+    }
+    if !settings.providers.ionos.api_prefix.is_empty() {
+        registry.register(
+            "ionos",
+            Box::new(IonosClient::new(
+                settings.providers.ionos.api_prefix.clone(),
+                settings.providers.ionos.api_secret.clone(),
+                http.clone(),
+            )),
+        );
+    }
+    if !settings.providers.dynadot.api_key.is_empty() {
+        registry.register(
+            "dynadot",
+            Box::new(DynadotClient::new(
+                settings.providers.dynadot.api_key.clone(),
+                settings.providers.dynadot.sandbox,
+                http.clone(),
+            )),
+        );
+    }
+    if !settings.providers.namecom.username.is_empty() {
+        registry.register(
+            "namecom",
+            Box::new(NamecomClient::new(
+                settings.providers.namecom.username.clone(),
+                settings.providers.namecom.api_token.clone(),
+                settings.providers.namecom.sandbox,
+                http.clone(),
+            )),
+        );
+    }
+    if !settings.providers.gandi.personal_access_token.is_empty() {
+        registry.register(
+            "gandi",
+            Box::new(GandiClient::new(
+                settings.providers.gandi.personal_access_token.clone(),
+                settings.providers.gandi.sandbox,
                 http.clone(),
             )),
         );

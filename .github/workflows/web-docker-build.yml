@@ -1,0 +1,25 @@
+name: Build web Docker image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-web-image:
+    name: Build web Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build Docker image
+        run: docker build --file web/.stacker/Dockerfile --tag reggae-web:${{ github.sha }} --tag reggae-web:main web

@@ -57,6 +57,15 @@ $EDITOR config.yaml
 | `DM_PROVIDERS_CLOUDFLARE_API_TOKEN` | `providers.cloudflare.api_token` | Cloudflare token |
 | `DM_PROVIDERS_GODADDY_API_KEY` | `providers.godaddy.api_key` | GoDaddy key |
 | `DM_PROVIDERS_GODADDY_API_SECRET` | `providers.godaddy.api_secret` | GoDaddy secret |
+| `DM_PROVIDERS_GANDI_PERSONAL_ACCESS_TOKEN` | `providers.gandi.personal_access_token` | Gandi PAT |
+| `DM_PROVIDERS_GANDI_SANDBOX` | `providers.gandi.sandbox` | Use Gandi sandbox |
+| `DM_PROVIDERS_NAMECOM_USERNAME` | `providers.namecom.username` | Name.com username |
+| `DM_PROVIDERS_NAMECOM_API_TOKEN` | `providers.namecom.api_token` | Name.com API token |
+| `DM_PROVIDERS_NAMECOM_SANDBOX` | `providers.namecom.sandbox` | Use Name.com test server |
+| `DM_PROVIDERS_DYNADOT_API_KEY` | `providers.dynadot.api_key` | Dynadot API key |
+| `DM_PROVIDERS_DYNADOT_SANDBOX` | `providers.dynadot.sandbox` | Use Dynadot sandbox |
+| `DM_PROVIDERS_IONOS_API_PREFIX` | `providers.ionos.api_prefix` | IONOS key prefix |
+| `DM_PROVIDERS_IONOS_API_SECRET` | `providers.ionos.api_secret` | IONOS key secret |
 | `DM_SCHEDULER_ENABLED` | `scheduler.enabled` | Enable expiry daemon |
 | `DM_SCHEDULER_EXPIRY_LEAD_DAYS` | `scheduler.expiry_lead_days` | Notify N days before expiry |
 
@@ -92,6 +101,10 @@ scheduler:
 | Cloudflare | ✅ Full | `api_token` (Bearer) |
 | GoDaddy | ✅ Full | `api_key` + `api_secret` |
 | Namecheap | ✅ Full | `api_user` + `api_key` (XML API) |
+| Gandi | ✅ Full | Personal Access Token (Bearer) |
+| Name.com | ✅ Full | `username` + `api_token` (Basic) |
+| Dynadot | ✅ Full | `api_key` (XML API) |
+| IONOS | ✅ DNS + domain info | `api_prefix.api_secret` header |
 
 ## Output formats
 
